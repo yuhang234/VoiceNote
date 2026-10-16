@@ -1,6 +1,6 @@
 """VoiceNote 入口。
 
-    python -m voicenote             # 启动（托盘常驻）
+    python -m voicenote             # 启动（托盘常驻 + 主界面）
     python -m voicenote --check     # 体检环境并打印配置，不启动
     python -m voicenote --selftest  # 跑一次端到端自检后退出
 
@@ -128,6 +128,14 @@ def run_check(cfg: Config) -> int:
     lines.append("")
     lines.extend(_audio_device_lines(cfg))
 
+    api = cfg.asr.api
+    try:
+        from .secret_store import SecretStore
+
+        has_key = SecretStore(cfg.state_dir).has_api_key()
+    except Exception:
+        has_key = False
+
     lines.extend(
         [
             "",
@@ -138,6 +146,12 @@ def run_check(cfg: Config) -> int:
             f"  compute_type= {cfg.asr.compute_type}",
             f"  language    = {cfg.asr.language or '(自动检测)'}",
             "",
+            "云端 API 配置 :",
+            f"  template    = {api.template}",
+            f"  base_url    = {api.base_url}",
+            f"  model       = {api.model}",
+            f"  API Key     = {'已配置（state/secrets.json）' if has_key else '未配置'}",
+            "",
             "VAD 分段      :",
             f"  阈值 {cfg.vad.speech_threshold}，静音 {cfg.vad.min_silence_ms}ms 断句，"
             f"最长 {cfg.vad.max_segment_s}s 强制切分",
@@ -145,6 +159,7 @@ def run_check(cfg: Config) -> int:
             "",
             f"音频留存      : {'开启' if cfg.audio.enabled else '关闭'}",
             f"模型下载源    : {cfg.general.hf_endpoint or '(HuggingFace 官方)'}",
+            f"关闭窗口行为  : {cfg.general.close_action}",
         ]
     )
 
@@ -190,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from .app import run
 
-    return run(cfg)
+    return run(cfg, config_path=find_config(args.config))
 
 
 if __name__ == "__main__":

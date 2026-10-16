@@ -16,7 +16,8 @@
 - **不说话时几乎零开销。** 本地 VAD 判断有没有人在说话，静音时的音频**直接丢弃** ——
   不占 GPU、不出文本、也不上传到任何地方。
 - **停顿约 0.7 秒即出字。** 说一句、停一下，这句话就会出现在当天的记录里。
-- **完全离线。** 语音不出本机，断网照常工作，没有调用成本。
+- **默认完全离线。** 语音不出本机，断网照常工作，没有调用成本；也可以选配
+  OpenAI 兼容的云端识别引擎（见下文「界面与设置」）。
 
 ## 环境要求
 
@@ -90,6 +91,26 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 没装也不影响便携版）。构建脚本会自动对打好的 exe 跑一次自检，**跑不过就直接失败**，
 不会产出看起来正常但 GPU 用不了的坏包。
 
+## 界面与设置
+
+单击托盘图标打开主窗口。**关闭窗口默认只是隐藏到托盘，录音不中断**；想让它直接退出，
+把 `general.close_action` 改成 `"exit"`。左侧四个页面：
+
+| 页面 | 能做什么 |
+|---|---|
+| 记录 | 按日期翻看记录，点 ▶ 回放当时那段音频、复制文本、用系统程序打开当天文件 |
+| 本地模型 | 查看 `tiny` / `base` / `small` / `large-v3-turbo` 的缓存状态，下载 / 重试 / 一键切换（切换后自动热加载，不用重启） |
+| API 配置 | 使用 OpenAI 兼容的云端识别：内置 OpenAI / 硅基流动 / Groq 模板，可一键测连通性 |
+| 录音与系统 | 麦克风、VAD 参数、识别提示词、数据目录、开机自启、关闭窗口行为 |
+
+托盘右键菜单提供同样的入口：打开主界面、选项设置、API 配置、暂停/恢复监听、开机自启、
+打开数据目录、退出。
+
+**API Key 不存在 `config.toml` 里**，而是保存在 `<data_dir>/state/secrets.json`
+（当前为明文，仅供本机使用；加密存储留待后续版本）。这样把 `config.toml` 分享出去
+或提交到仓库时不会带出密钥。厂商私有协议（如 DashScope 原生接口）列表里可见，
+但标注为暂不支持，需要走其 OpenAI 兼容模式或自建网关。
+
 ## 记录存在哪
 
 默认在 `%USERPROFILE%\VoiceNote`，想换盘就改 `config.toml` 里的 `general.data_dir`。
@@ -99,6 +120,7 @@ VoiceNote/
 ├── transcripts/2026-10-05.md          # 文本，一天一个文件
 ├── audio/2026-10-05/100211-838.flac   # 音频，按天分目录
 ├── models/silero_vad.onnx
+├── state/secrets.json                 # 云端 API 的 Key（有则会有，不进版本库）
 └── logs/voicenote.log
 ```
 
@@ -124,15 +146,18 @@ VoiceNote/
 | `audio.device` | 想指定麦克风。先跑 `python -m voicenote --check` 看设备列表，填名字的一部分即可 |
 | `asr.initial_prompt` | 人名、项目名、专业术语老识别错 → 写进去当提示词 |
 | `asr.language` | 默认留空自动检测，中英混说体验最好。若输出繁体，可试填 `zh` |
+| `asr.engine` | 默认 `faster_whisper`（本地）；想用云端识别改成 `api`（建议直接在「API 配置」页改） |
+| `general.close_action` | 关窗口想直接退出就填 `"exit"`；默认 `"minimize_to_tray"`（隐藏到托盘，继续录音） |
 | `general.data_dir` | 想把记录放到别的盘 |
 
 ## 验证与自检
 
 ```bash
-# 单元测试：分段逻辑的边界（咳嗽被滤掉、长独白强制切分等）
+# 单元测试：分段逻辑、配置兼容性、API 请求/响应解析、模型下载与热切换、界面接线
+# （界面测试用 Qt offscreen 平台，没装 PySide6 会自动跳过）
 .venv\Scripts\python.exe -m pytest tests\ -q
 
-# 环境体检：打印配置、音频设备、CUDA DLL 情况
+# 环境体检：打印配置、音频设备、CUDA DLL 情况、云端 API 是否已配置 Key
 .venv\Scripts\python.exe -m voicenote --check
 
 # 端到端自检：用一段公开语音跑完整链路，不需要麦克风
@@ -154,7 +179,10 @@ VoiceNote/
 - **强制切分不对齐低能量点。** 连续说超过 20 秒会硬切，切点可能落在词中间。
   20 秒一段的情况下很少见，暂不为它增加复杂度。
 - **音频会持续累积**，约 60MB/小时。目前没有自动清理。
-- **还没实现搜索界面。** 记录是纯 markdown，用任何编辑器或 `grep` 都能查。
+- **记录页没有全文搜索**，只按日期浏览。记录是纯 markdown，复杂查询用任何编辑器或 `grep`。
+- **本地模型只支持 faster-whisper 系列**（tiny/base/small/large-v3-turbo）。SenseVoiceSmall
+  的本地 ONNX 推理还没做，想用它可以在「API 配置」里接硅基流动的对应模型。
+- **API Key 目前明文存放**在 `state/secrets.json`（仅本机用户目录）。加密存储留待后续版本。
 
 ## 后续可能的方向
 

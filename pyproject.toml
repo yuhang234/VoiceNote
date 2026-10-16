@@ -13,7 +13,10 @@ dependencies = [
     "soundfile>=0.13",
     "numpy>=2.0",
     "onnxruntime>=1.20",
-    "pystray>=0.19",
+    # 图形界面（托盘 + 主窗口 + 设置页）。用 Essentials 而不是完整 PySide6：
+    # 本项目只用到 QtCore/QtGui/QtWidgets，Essentials 正好覆盖，
+    # 能省掉 Addons（QtWebEngine/QtMultimedia 等）约 100MB+ 的安装体积。
+    "PySide6-Essentials>=6.8",
     "pillow>=10",
     # Windows GPU 推理所需：ctranslate2 在 Windows 上不会自带这两个 DLL，
     # 必须由这两个包提供 cudnn64_9.dll / cublas64_12.dll。
@@ -36,3 +39,5 @@ packages = ["src/voicenote"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# src 布局：不装包也能直接跑 pytest（CI 与开发机都省一步安装）。
+pythonpath = ["src"]

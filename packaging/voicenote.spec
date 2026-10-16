@@ -38,8 +38,6 @@ datas = [
 ]
 
 hiddenimports = [
-    # pystray 按平台动态选后端，静态分析看不到
-    "pystray._win32",
     "onnxruntime.capi._pybind_state",
 ]
 

@@ -1,34 +1,42 @@
-"""应用装配：把采集 → 分段 → 识别 → 落盘串起来，并挂上托盘。
+"""应用装配：把采集 → 分段 → 识别 → 落盘串起来，并挂上界面。
 
-线程模型（三段 + 托盘）：
+线程模型（三段 + Qt 主线程）：
+
     音频回调线程   sounddevice 驱动触发，只做入队
     segment 线程   消费音频队列，跑 VAD 分段，产出语音段
     asr 线程       消费语音段，跑识别，写盘
-    主线程         pystray 消息循环，阻塞在 tray.run()
+    主线程         Qt 事件循环（QApplication），同时承载托盘、主窗口、设置页
 
 选线程而不是多进程：模型只加载一次，ctranslate2 推理时会释放 GIL，
 而 16GB 内存下多进程会各存一份模型（约 1.5GB），不划算。
+
+界面（PySide6）只在 ``_init_ui`` 里延迟导入：核心的录音/分段/落盘逻辑
+以及单元测试不依赖 Qt。托盘、窗口、设置页共享同一个 Qt 事件循环，
+彻底消除旧版 pystray + 消息循环竞争的问题。
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import queue
 import threading
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 
+from . import config as config_module
 from .asr import create_engine
 from .asr.base import ASREngine
 from .audio import AudioCapture
-from .config import Config
+from .config import AsrConfig, Config
 from .cuda_env import register_cuda_dlls
 from .models import ensure_vad_model, whisper_model_cached
+from .paths import open_in_default_app
+from .secret_store import SecretStore
+from .status import IconState
 from .store import Store
-from .tray import IconState, Tray
 from .vad import Segment, Segmenter, SileroVad
 
 log = logging.getLogger(__name__)
@@ -85,10 +93,20 @@ class _InstanceLock:
 
 
 class Application:
-    """实现 tray.Controller 协议。"""
+    """应用中枢：实现托盘/窗口所需的能力，并托管三条后台线程。"""
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(
+        self,
+        cfg: Config,
+        *,
+        config_path: Path | None = None,
+        engine_factory: Callable[..., ASREngine] | None = None,
+        secrets: SecretStore | None = None,
+    ) -> None:
         self._cfg = cfg
+        self._config_path = Path(config_path) if config_path is not None else None
+        self._engine_factory = engine_factory or create_engine
+        self._secrets = secrets or SecretStore(cfg.state_dir)
 
         self._lock = _InstanceLock(cfg.state_dir / "session.lock")
         self._paused = threading.Event()
@@ -96,6 +114,8 @@ class Application:
         self._shutdown_done = threading.Event()
         self._engine_ready = threading.Event()
         self._asr_lock = threading.Lock()
+        # 引擎代号：加载与手动热切换竞争时，以代号小者为准丢弃过期结果。
+        self._engine_epoch = 0
 
         self._audio_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=AUDIO_QUEUE_MAX)
         self._segment_q: queue.Queue[Segment] = queue.Queue(maxsize=SEGMENT_QUEUE_MAX)
@@ -104,13 +124,20 @@ class Application:
         self._segmenter: Segmenter | None = None
         self._engine: ASREngine | None = None
         self._store: Store | None = None
-        self._tray: Tray | None = None
         self._threads: list[threading.Thread] = []
+        self._asr_thread: threading.Thread | None = None
+
+        # Qt 相关（没有界面时保持为 None，核心逻辑照常可测）
+        self._qt_app: Any = None
+        self._window: Any = None
+        self._tray: Any = None
+        self._bridge: Any = None
+        self._state = IconState.LISTENING
 
     # ---------- 生命周期 ----------
 
     def start(self) -> None:
-        """启动全部组件，然后阻塞在托盘消息循环里，直到 shutdown()。"""
+        """启动全部组件，然后阻塞在 Qt 事件循环里，直到 shutdown()。"""
         self._lock.acquire()
 
         # 必须在任何 ctranslate2 调用之前注册 DLL 目录。
@@ -123,25 +150,31 @@ class Application:
         )
         self._audio = AudioCapture(self._cfg.audio, self._audio_q)
 
-        # 托盘必须早于模型加载建好。模型加载（首次运行还要下 1.6GB）放在 asr
-        # 线程里，图标才能立刻可见并弹出下载提示 —— 否则无控制台的打包版就是
-        # 一个十几分钟毫无反应的图标，用户只会以为程序坏了。
-        self._tray = Tray(self)
+        # 界面必须早于模型加载建好。模型加载（首次运行还要下 1.6GB）放在 asr
+        # 线程里，托盘才能立刻可见并弹出下载提示 —— 否则无控制台的打包版就是
+        # 一个十几分钟毫无反应的进程，用户只会以为程序坏了。
+        if not self._init_ui():
+            self._teardown_ui()
+            self._lock.release()
+            raise RuntimeError(
+                "界面依赖不可用：请先安装 PySide6（pip install PySide6-Essentials）"
+            )
 
         self._threads = [
             threading.Thread(target=self._segment_loop, name="segment", daemon=True),
-            threading.Thread(target=self._asr_loop, name="asr", daemon=True),
         ]
         for thread in self._threads:
             thread.start()
+        self._ensure_asr_thread()
 
         self._audio.start()
         log.info("VoiceNote 已启动，正在准备识别模型…（托盘图标：黄=准备中，绿=监听中）")
 
-        self._tray.run()  # 阻塞，直到托盘被 stop()
+        assert self._qt_app is not None
+        self._qt_app.exec()  # 阻塞，直到托盘「退出」或关闭行为为 exit 时关闭窗口
 
-        # 托盘循环结束了。shutdown() 可能是菜单「退出」在 pystray 线程里调用的，
-        # 那个线程还要把最后一段话 flush 完 —— 直接返回会让主线程退出进程、
+        # Qt 循环结束了。shutdown() 可能是托盘菜单在主线程里调用的，
+        # 那里的收尾工作还要把最后一段话 flush 完 —— 直接返回会让进程退出、
         # 把用户最后说的话截掉，所以这里必须等它收完尾。
         self.shutdown()
         self._shutdown_done.wait(timeout=JOIN_TIMEOUT_S)
@@ -169,17 +202,107 @@ class Application:
         for thread in self._threads:
             thread.join(timeout=JOIN_TIMEOUT_S)
 
-        if self._tray is not None:
-            self._tray.stop()
+        self._teardown_ui()
         self._lock.release()
         self._shutdown_done.set()
         log.info("已退出")
 
-    # ---------- tray.Controller ----------
+    # ---------- 界面 ----------
+
+    def _init_ui(self) -> bool:
+        try:
+            from .ui.app_window import MainWindow, ensure_qt_app
+            from .ui.bridge import UiBridge
+            from .ui.tray_icon import TrayIcon
+        except ImportError:
+            log.exception("无法加载界面依赖（PySide6），VoiceNote 需要图形界面才能运行")
+            return False
+
+        try:
+            self._qt_app = ensure_qt_app()
+            self._window = MainWindow(self)
+            self._tray = TrayIcon(self)
+            self._bridge = UiBridge()
+
+            # 信号连接：worker 线程 emit → 自动排队到主线程执行。
+            self._bridge.state_changed.connect(self._tray.set_state)
+            self._bridge.state_changed.connect(self._window.on_state_changed)
+            self._bridge.message.connect(self._tray.notify)
+            self._bridge.message.connect(self._window.on_notification)
+            self._bridge.transcript_saved.connect(self._window.on_transcript_saved)
+
+            self._window.attach_tray(self._tray)
+            self._tray.show()
+        except Exception:
+            log.exception("界面初始化失败")
+            return False
+
+        if self._cfg.general.open_ui_on_startup:
+            self._window.show()
+        return True
+
+    def _teardown_ui(self) -> None:
+        for widget in (self._window, self._tray):
+            if widget is not None:
+                try:
+                    widget.hide()
+                except Exception as exc:
+                    log.debug("隐藏界面组件失败：%s", exc)
+        if self._qt_app is not None:
+            try:
+                self._qt_app.quit()
+            except Exception as exc:
+                log.debug("退出 Qt 事件循环失败：%s", exc)
+
+    def show_page(self, page: str) -> None:
+        """由托盘/窗口请求：显示主窗口并切换到指定页面。"""
+        if self._window is None:
+            return
+        self._window.show_page(page)
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
+
+    def notify(self, message: str) -> None:
+        """弹一条托盘气泡（从任意线程调用都安全）。"""
+        if self._bridge is not None:
+            self._bridge.message.emit(message)
+        else:
+            log.info("%s", message)
+
+    # ---------- 托盘/界面控制器协议 ----------
+
+    @property
+    def cfg(self) -> Config:
+        return self._cfg
+
+    @property
+    def secrets(self) -> SecretStore:
+        return self._secrets
+
+    @property
+    def config_path(self) -> Path | None:
+        return self._config_path
 
     @property
     def paused(self) -> bool:
         return self._paused.is_set()
+
+    @property
+    def state(self) -> IconState:
+        return self._state
+
+    @property
+    def active_engine_name(self) -> str:
+        if self._engine is not None:
+            return getattr(self._engine, "name", str(self._engine))
+        if self._cfg.asr.engine == "api":
+            return f"api/{self._cfg.asr.api.model}"
+        return f"faster-whisper/{self._cfg.asr.model}"
+
+    def api_key(self) -> str | None:
+        """当前生效的 API Key（仅存在于内存和 secrets.json）。"""
+        return self._secrets.get_api_key()
 
     def pause(self) -> None:
         if self.paused:
@@ -213,18 +336,83 @@ class Application:
         self._set_state(IconState.LISTENING)
 
     def open_today(self) -> None:
-        if self._store is None:
-            return
-        path = self._store.today_file()
+        """打开主界面的「日常记录」页（软件内阅读，不再拉起外部编辑器）。"""
+        self.show_page("transcripts")
+
+    def open_data_dir(self) -> None:
         try:
-            if not path.exists():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(f"# {path.stem}\n\n", encoding="utf-8")
-            os.startfile(path)  # noqa: S606 — 用系统默认程序打开，符合预期
+            self._cfg.data_dir.mkdir(parents=True, exist_ok=True)
+            self.open_path(self._cfg.data_dir)
         except Exception:
-            log.exception("打开今日记录失败：%s", path)
+            log.exception("打开数据目录失败：%s", self._cfg.data_dir)
+            self.notify(f"无法打开数据目录：{self._cfg.data_dir}")
+
+    def open_path(self, path: Path) -> None:
+        try:
+            open_in_default_app(Path(path))
+        except Exception as exc:
+            log.exception("用系统默认程序打开失败：%s", path)
+            self.notify(f"无法打开：{path}（{exc}）")
+
+    # ---------- 配置与引擎热切换 ----------
+
+    def save_config(self) -> Path | None:
+        """把当前配置写回 config.toml。返回写入路径；失败返回 None。"""
+        path = self._config_path or config_module.default_config_path()
+        try:
+            config_module.save(self._cfg, path)
+            log.info("配置已保存：%s", path)
+            return path
+        except OSError as exc:
+            log.exception("配置写入失败：%s", path)
+            self.notify(f"配置写入失败：{exc}")
+            return None
+
+    def switch_engine(self, new_asr_cfg: AsrConfig, api_key: str | None = None) -> bool:
+        """由设置界面触发的热切换。线程安全，不丢录音。
+
+        创建与预热都在 ``_asr_lock`` 内完成：换引擎和推理共用同一把锁，
+        保证旧引擎不会在推理进行中被释放；失败时旧引擎原样保留。
+        """
+        key = api_key if api_key is not None else self.api_key()
+        with self._asr_lock:
+            try:
+                old_engine = self._engine
+                # 1. 创建并预热新引擎（失败时旧引擎原样保留）
+                new_engine = self._engine_factory(new_asr_cfg, api_key=key)
+                new_engine.warmup()
+                # 2. 原子替换
+                self._engine_epoch += 1
+                self._engine = new_engine
+                self._engine_ready.set()
+                self._cfg.asr = new_asr_cfg
+            except Exception:
+                log.exception("ASR 引擎热切换失败，继续使用原引擎")
+                self._set_state(IconState.ERROR)
+                return False
+
+        # 3. 释放旧引擎资源（如 CTranslate2 的 GPU 显存）。
+        # 此时锁已释放，但由于所有推理都在锁内取引擎，不会有人还在用它。
+        del old_engine
+        log.info("ASR 引擎已成功热切换至：%s", self.active_engine_name)
+        self._ensure_asr_thread()
+        self._set_state(IconState.PAUSED if self.paused else IconState.LISTENING)
+        return True
 
     # ---------- worker 线程 ----------
+
+    def _ensure_asr_thread(self) -> None:
+        """确保 asr 线程在跑。
+
+        首次加载失败或加载期被手动切换时线程可能已退出；热切换成功后需要
+        把它重新拉起来，否则新引擎没有消费者。
+        """
+        if self._asr_thread is not None and self._asr_thread.is_alive():
+            return
+        thread = threading.Thread(target=self._asr_loop, name="asr", daemon=True)
+        self._asr_thread = thread
+        self._threads.append(thread)
+        thread.start()
 
     def _segment_loop(self) -> None:
         assert self._segmenter is not None
@@ -249,7 +437,7 @@ class Application:
                 log.exception("分段出错，跳过这一块音频")
 
     def _asr_loop(self) -> None:
-        if not self._load_engine():
+        if not self._engine_ready.is_set() and not self._load_engine():
             return
 
         while True:
@@ -267,15 +455,19 @@ class Application:
 
         放在 asr 线程里而不是 start()：托盘这时已经在跑了，下载提示才弹得出来。
         """
-        first_run = not whisper_model_cached(self._cfg.asr.model)
+        cfg = self._cfg.asr
+        epoch = self._engine_epoch
+        first_run = cfg.engine == "faster_whisper" and not whisper_model_cached(
+            cfg.model
+        )
         if first_run:
             source = self._cfg.general.hf_endpoint or "huggingface.co"
             log.info(
                 "本地没有 %s 的缓存，开始下载（约 1.6GB，来源 %s）",
-                self._cfg.asr.model,
+                cfg.model,
                 source,
             )
-            self._notify(
+            self.notify(
                 f"首次运行，正在下载识别模型（约 1.6GB）\n"
                 f"来源：{source}\n下载期间无法记录，请稍候…"
             )
@@ -283,7 +475,7 @@ class Application:
 
         try:
             t0 = time.perf_counter()
-            self._engine = create_engine(self._cfg.asr)
+            engine = self._engine_factory(cfg, api_key=self.api_key())
             log.info("模型加载完成，用时 %.1fs", time.perf_counter() - t0)
         except Exception:
             log.exception("ASR 引擎加载失败，本次运行无法识别")
@@ -292,28 +484,42 @@ class Application:
 
         try:
             t0 = time.perf_counter()
-            self._engine.warmup()
+            engine.warmup()
             log.info("模型预热完成，用时 %.1fs", time.perf_counter() - t0)
         except Exception:
             # 预热失败只是慢，不该拦住整个应用。
             log.exception("模型预热失败，首次识别会明显变慢")
 
-        self._engine_ready.set()
+        with self._asr_lock:
+            if epoch != self._engine_epoch:
+                # 用户在加载期间已经手动切换了引擎：丢弃这次加载的结果，
+                # 继续消费队列（新引擎已就绪）。
+                log.info("模型加载期间引擎已被手动切换，丢弃本次加载结果")
+                return True
+            self._engine = engine
+            self._engine_ready.set()
+
         if first_run:
-            self._notify("模型准备完成，已开始监听")
+            self.notify("模型准备完成，已开始监听")
         self._set_state(IconState.PAUSED if self.paused else IconState.LISTENING)
         return True
 
     def _transcribe(self, segment: Segment) -> None:
-        assert self._engine is not None and self._store is not None
+        store = self._store
+        if store is None:
+            return
 
         self._set_state(IconState.TRANSCRIBING)
         t0 = time.perf_counter()
         try:
-            # ctranslate2 的 WhisperModel 不支持并发调用同一个实例，
-            # 这里加锁兜住（shutdown 路径也可能触发识别）。
+            # ctranslate2 的 WhisperModel 不支持并发调用同一个实例；
+            # 引擎对象的读取与推理都放在同一把锁里，热切换才不会把正在
+            # 使用的引擎释放掉。
             with self._asr_lock:
-                text = self._engine.transcribe(segment.audio, segment.sample_rate)
+                engine = self._engine
+                if engine is None:
+                    return
+                text = engine.transcribe(segment.audio, segment.sample_rate)
         except Exception:
             log.exception("识别失败（段长 %.1fs）", segment.duration_s)
             return
@@ -327,8 +533,9 @@ class Application:
             log.debug("识别结果为空（段长 %.1fs，耗时 %.1fs）", segment.duration_s, elapsed)
             return
 
-        self._store.save(segment, text)
+        store.save(segment, text)
         log.info("[%.0fms] %s", elapsed * 1000, text)
+        self._signal_transcript_saved(segment)
 
     # ---------- 辅助 ----------
 
@@ -340,12 +547,22 @@ class Application:
             log.warning("识别队列已满，丢弃这一段（%.1fs）", segment.duration_s)
 
     def _set_state(self, state: IconState) -> None:
-        if self._tray is not None:
-            self._tray.set_state(state)
+        self._state = state
+        if self._bridge is not None:
+            try:
+                self._bridge.state_changed.emit(state)
+            except RuntimeError:
+                pass
 
-    def _notify(self, message: str) -> None:
-        if self._tray is not None:
-            self._tray.notify(message)
+    def _signal_transcript_saved(self, segment: Segment) -> None:
+        if self._bridge is None:
+            return
+        day = segment.started_at.strftime("%Y-%m-%d")
+        path = self._cfg.transcripts_dir / f"{day}.md"
+        try:
+            self._bridge.transcript_saved.emit(str(path))
+        except RuntimeError:
+            pass
 
     @staticmethod
     def _drain(q: queue.Queue) -> None:
@@ -356,8 +573,8 @@ class Application:
                 return
 
 
-def run(cfg: Config) -> int:
-    app = Application(cfg)
+def run(cfg: Config, config_path: Path | None = None) -> int:
+    app = Application(cfg, config_path=config_path)
     try:
         app.start()
     except SingleInstanceError as exc:
