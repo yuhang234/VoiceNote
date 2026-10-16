@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -51,3 +52,24 @@ def executable_path() -> Path:
 
     pythonw = exe.with_name("pythonw.exe")
     return pythonw if pythonw.is_file() else exe
+
+
+def open_in_default_app(path: Path) -> None:
+    """用系统默认程序打开文件或目录。
+
+    Windows 用 ``os.startfile``（打包版也走这里）；macOS 用 ``open``；
+    其余平台（开发机 / CI）用 ``xdg-open``。非 Windows 平台没有这些命令时
+    会抛 ``OSError``，由调用方决定提示方式。
+    """
+    path = Path(path)
+    if hasattr(os, "startfile"):
+        os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
+        return
+
+    import subprocess
+
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+

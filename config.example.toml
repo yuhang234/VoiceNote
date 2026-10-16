@@ -1,6 +1,8 @@
 # VoiceNote 配置
 #
 # 把本文件复制成 config.toml 后按需修改。所有项都可省略，省略即用下面的默认值。
+# 大部分项也可以直接在应用里的「本地模型 / API 配置 / 录音与系统」页面改，
+# 界面保存时会重写 config.toml（注释会丢，但值都在）。
 
 [general]
 # 数据根目录。留空 = %USERPROFILE%\VoiceNote
@@ -8,6 +10,10 @@ data_dir = ""
 # 模型下载源。首次运行要下约 1.6GB 的识别模型，官方 huggingface.co 在国内
 # 经常不通，所以默认走国内镜像。想用官方源就把这行改成 ""。
 hf_endpoint = "https://hf-mirror.com"
+# 启动时是否自动打开主界面（false = 仅托盘静默启动）。
+open_ui_on_startup = false
+# 关闭主窗口时的行为："minimize_to_tray"（隐藏到托盘，录音继续）或 "exit"（退出程序）。
+close_action = "minimize_to_tray"
 
 [audio]
 # 是否留存音频。关掉就只存文本。
@@ -36,8 +42,9 @@ pre_roll_ms = 300
 speech_pad_ms = 200
 
 [asr]
-# 引擎。目前只实现了 faster_whisper。
+# 引擎："faster_whisper"（本地离线，默认）或 "api"（云端 OpenAI 兼容接口）。
 engine = "faster_whisper"
+# 本地模型：tiny / base / small / large-v3-turbo，可在「本地模型」页面一键切换。
 model = "large-v3-turbo"
 # cuda 或 cpu。cuda 跑不起来时改成 cpu 即可，其余不用动。
 device = "cuda"
@@ -49,6 +56,26 @@ language = ""
 beam_size = 1
 # 初始提示词，可用来喂专有名词（人名、项目名、术语），提升识别率。
 initial_prompt = ""
+
+[asr.api]
+# 云端 ASR（engine = "api" 时生效）。支持任何 OpenAI 兼容的
+# /audio/transcriptions 服务：OpenAI、硅基流动 (SiliconFlow)、Groq、自建网关。
+# 厂商模板 id 仅用于界面回显：siliconflow / groq / openai / dashscope / custom。
+template = "siliconflow"
+base_url = "https://api.siliconflow.cn/v1"
+# 音频转写端点相对路径，非标准网关可在此调整。
+endpoint_path = "/audio/transcriptions"
+model = "FunAudioLLM/SenseVoiceSmall"
+# 单次请求超时（秒）。
+timeout_s = 30
+# 从响应 JSON 里取文本的路径，支持下标，如 text 或 results[0].transcript。
+response_text_path = "text"
+# 自定义请求头（JSON 对象）。值里的 {API_KEY} 会替换成真实密钥；
+# 留空时使用标准 Authorization: Bearer <key>。
+custom_headers_json = ""
+
+# API Key 不在这里！它单独存放在 <data_dir>/state/secrets.json，
+# 避免分享配置或提 PR 时把密钥带出去。
 
 [logging]
 level = "INFO"

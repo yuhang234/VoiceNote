@@ -6,6 +6,9 @@ env/
 # 用户自己的配置：含个人 data_dir 等。模板见 config.example.toml
 config.toml
 
+# API 密钥的本地存储（正常在数据目录里；若把 data_dir 指到仓库内，这行兜底）
+secrets.json
+
 # Python
 __pycache__/
 *.py[cod]
