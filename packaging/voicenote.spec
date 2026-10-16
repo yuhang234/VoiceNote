@@ -39,6 +39,21 @@ datas = [
 
 hiddenimports = [
     "onnxruntime.capi._pybind_state",
+    # PySide6 GUI 核心与 voicenote.ui 模块（延迟加载 / 运行时导入）
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "voicenote.ui",
+    "voicenote.ui.app_window",
+    "voicenote.ui.tray_icon",
+    "voicenote.ui.general_view",
+    "voicenote.ui.api_config_view",
+    "voicenote.ui.local_models_view",
+    "voicenote.ui.reader_view",
+    "voicenote.ui.player",
+    "voicenote.ui.styles",
+    "voicenote.ui.bridge",
+    "voicenote.ui.workers",
 ]
 
 a = Analysis(
@@ -51,6 +66,7 @@ a = Analysis(
     runtime_hooks=[],
     # 这些都没用到，排掉能省体积也少些意外
     excludes=[
+        "pystray",
         "tkinter",
         "pytest",
         "_pytest",

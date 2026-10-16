@@ -326,3 +326,50 @@ def test_api_view_dashscope_marked_unsupported(app_env):
     view._combo_template.setCurrentIndex(index)
     view._on_apply_template()
     assert "暂不可用" in view._template_note.text() or "未实现" in view._template_note.text()
+
+
+# ---------------------------------------------------------------------------
+# 托盘通知与界面装配回归测试
+# ---------------------------------------------------------------------------
+
+
+def test_tray_icon_notify(qapp):
+    from voicenote.ui.tray_icon import TrayIcon
+
+    class DummyController:
+        paused = False
+        active_engine_name = "test"
+        def show_page(self, page): pass
+        def open_data_dir(self): pass
+        def shutdown(self): pass
+        def pause(self): pass
+        def resume(self): pass
+        def notify(self, msg): pass
+
+    tray = TrayIcon(DummyController())
+    # 验证 notify 契约：支持单个 message，以及传入自定义 title
+    tray.notify("测试通知内容")
+    tray.notify("第二条通知", title="自定义标题")
+
+
+def test_application_init_ui_wiring(tmp_path, qapp):
+    cfg = load(None)
+    cfg.general.data_dir = str(tmp_path / "data")
+    app = Application(cfg, config_path=tmp_path / "config.toml")
+    try:
+        ok = app._init_ui()
+        assert ok is True
+        assert hasattr(app._tray, "notify")
+        # 触发通知，验证全链路接线正常（不抛 AttributeError）
+        app.notify("全链路接线测试通知")
+    finally:
+        app._teardown_ui()
+
+
+def test_packaging_spec_modules():
+    spec_path = Path(__file__).resolve().parents[1] / "packaging" / "voicenote.spec"
+    assert spec_path.is_file()
+    content = spec_path.read_text(encoding="utf-8")
+    assert "PySide6.QtWidgets" in content
+    assert "voicenote.ui" in content
+    assert "pystray" in content  # in excludes

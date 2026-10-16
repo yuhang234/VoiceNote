@@ -153,12 +153,17 @@ class Application:
         # 界面必须早于模型加载建好。模型加载（首次运行还要下 1.6GB）放在 asr
         # 线程里，托盘才能立刻可见并弹出下载提示 —— 否则无控制台的打包版就是
         # 一个十几分钟毫无反应的进程，用户只会以为程序坏了。
-        if not self._init_ui():
+        try:
+            if not self._init_ui():
+                self._teardown_ui()
+                self._lock.release()
+                raise RuntimeError(
+                    "界面依赖不可用：请先安装 PySide6（pip install PySide6-Essentials）"
+                )
+        except Exception:
             self._teardown_ui()
             self._lock.release()
-            raise RuntimeError(
-                "界面依赖不可用：请先安装 PySide6（pip install PySide6-Essentials）"
-            )
+            raise
 
         self._threads = [
             threading.Thread(target=self._segment_loop, name="segment", daemon=True),
@@ -233,9 +238,9 @@ class Application:
 
             self._window.attach_tray(self._tray)
             self._tray.show()
-        except Exception:
+        except Exception as exc:
             log.exception("界面初始化失败")
-            return False
+            raise RuntimeError(f"界面初始化失败：{exc}") from exc
 
         if self._cfg.general.open_ui_on_startup:
             self._window.show()
