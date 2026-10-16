@@ -132,6 +132,21 @@ class TrayIcon(QSystemTrayIcon):
         self.setToolTip(TITLES[state])
         self.refresh()
 
+    # ---------- 通知 ----------
+
+    def notify(self, message: str, title: str | None = None) -> None:
+        """弹出系统托盘气泡通知。"""
+        t = title or APP_NAME
+        try:
+            self.showMessage(
+                t,
+                message,
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+        except Exception as exc:
+            log.debug("托盘消息弹出失败：%s", exc)
+
     # ---------- 事件 ----------
 
     def _on_activated(self, reason) -> None:
