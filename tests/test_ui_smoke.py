@@ -333,6 +333,44 @@ def test_api_view_dashscope_marked_unsupported(app_env):
 # ---------------------------------------------------------------------------
 
 
+def test_tray_menu_uses_theme_aware_stylesheet(qapp, monkeypatch):
+    from voicenote.ui.tray_icon import TrayIcon, _MENU_QSS_DARK, _MENU_QSS_LIGHT
+
+    class DummyController:
+        paused = False
+        active_engine_name = "faster-whisper/large-v3-turbo"
+
+        def show_page(self, page):  # noqa: ARG002
+            pass
+
+        def open_data_dir(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def notify(self, message, title=None):  # noqa: ARG002
+            pass
+
+    tray = TrayIcon(DummyController())
+    expected = _MENU_QSS_DARK if TrayIcon._is_dark_mode() else _MENU_QSS_LIGHT
+    assert tray._menu.styleSheet() == expected
+
+    # 两套主题都必须明确设置前景色、背景色和选中态，避免系统原生配色干扰。
+    assert "color: #e8e8e8" in _MENU_QSS_DARK
+    assert "background: #2d2d2d" in _MENU_QSS_DARK
+    assert "color: #1f2328" in _MENU_QSS_LIGHT
+    assert "background: #ffffff" in _MENU_QSS_LIGHT
+
+    monkeypatch.setattr(tray, "_is_dark_mode", lambda: True)
+    tray._apply_menu_theme()
+    assert tray._menu.styleSheet() == _MENU_QSS_DARK
+
+    monkeypatch.setattr(tray, "_is_dark_mode", lambda: False)
+    tray._apply_menu_theme()
+    assert tray._menu.styleSheet() == _MENU_QSS_LIGHT
+
+
 def test_tray_icon_notify(qapp):
     from voicenote.ui.tray_icon import TrayIcon
 

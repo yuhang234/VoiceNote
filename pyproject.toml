@@ -24,6 +24,10 @@ dependencies = [
     "nvidia-cublas-cu12>=12; sys_platform == 'win32'",
 ]
 
+[project.optional-dependencies]
+# NVIDIA Parakeet V3 走 NeMo 推理，依赖体积很大，因此不放入默认安装。
+parakeet = ["nemo_toolkit[asr]>=2.4"]
+
 [project.scripts]
 voicenote = "voicenote.__main__:main"
 

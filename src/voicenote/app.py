@@ -32,7 +32,7 @@ from .asr.base import ASREngine
 from .audio import AudioCapture
 from .config import AsrConfig, Config
 from .cuda_env import register_cuda_dlls
-from .models import ensure_vad_model, whisper_model_cached
+from .models import ensure_vad_model, model_cached
 from .paths import open_in_default_app
 from .secret_store import SecretStore
 from .status import IconState
@@ -462,7 +462,7 @@ class Application:
         """
         cfg = self._cfg.asr
         epoch = self._engine_epoch
-        first_run = cfg.engine == "faster_whisper" and not whisper_model_cached(
+        first_run = cfg.engine in ("faster_whisper", "parakeet") and not model_cached(
             cfg.model
         )
         if first_run:

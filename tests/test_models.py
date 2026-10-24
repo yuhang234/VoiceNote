@@ -33,6 +33,39 @@ def test_registry_contains_expected_models():
     assert "Phase 3" in sensevoice.unavailable_reason
 
 
+def test_parakeet_registered_and_engine_aware():
+    spec = models.model_spec("parakeet-tdt-0.6b-v3")
+    assert spec is not None
+    assert spec.engine == "parakeet"
+    assert spec.repo == "nvidia/parakeet-tdt-0.6b-v3"
+    # 引擎依赖未安装时静态清单标记为不可用，由界面动态覆盖
+    assert models.engine_for_model("parakeet-tdt-0.6b-v3") == "parakeet"
+    assert models.engine_for_model("large-v3-turbo") == "faster_whisper"
+    assert models.engine_for_model("no-such-model") == "faster_whisper"
+
+
+def test_model_cached_dispatches_by_engine(tmp_path):
+    # 默认没有任何缓存
+    assert models.model_cached("parakeet-tdt-0.6b-v3", tmp_path) is False
+    assert models.model_cached("tiny", tmp_path) is False
+
+    # Whisper 缓存仍然走 whisper_model_cached
+    fake_weight(tmp_path, "tiny")
+    assert models.model_cached("tiny", tmp_path) is True
+    assert models.model_cached("parakeet-tdt-0.6b-v3", tmp_path) is False
+
+    # Parakeet 缓存目录里放一个 .nemo 权重即算已缓存
+    snap = (
+        tmp_path
+        / "models--nvidia--parakeet-tdt-0.6b-v3"
+        / "snapshots"
+        / "rev1"
+    )
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / "model.nemo").write_bytes(b"parakeet")
+    assert models.model_cached("parakeet-tdt-0.6b-v3", tmp_path) is True
+
+
 def test_model_spec_unknown():
     assert models.model_spec("no-such-model") is None
     # 未知模型退回自身作为 repo 名

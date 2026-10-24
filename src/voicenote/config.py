@@ -25,7 +25,7 @@ T = TypeVar("T")
 #: 关闭主窗口时的行为。
 CLOSE_ACTIONS = ("minimize_to_tray", "exit")
 #: 本地引擎与云端 OpenAI 兼容引擎。
-ASR_ENGINES = ("faster_whisper", "api")
+ASR_ENGINES = ("faster_whisper", "parakeet", "api")
 
 CONFIG_NAME = "config.toml"
 
