@@ -12,6 +12,9 @@
     └── 退出 VoiceNote
 
 左键单击/双击托盘图标 = 打开主界面。
+
+托盘右键菜单会根据系统深色/浅色主题自动切换配色，保证文字与背景之间
+始终有足够对比度（Windows 原生菜单在深色模式下文字偏暗、辨识度差）。
 """
 
 from __future__ import annotations
@@ -20,13 +23,75 @@ import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .. import APP_NAME, __version__
 from .. import autostart
 from ..status import COLORS, TITLES, IconState
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# 深色 / 浅色主题的右键菜单样式表
+#
+# Windows 系统托盘的原生 QMenu 在深色模式下文字颜色偏暗，和深色背景
+# 差别不明显。这里为深色和浅色分别提供明确的 QSS，强制设置高对比度的
+# 文字色与背景色。
+# ---------------------------------------------------------------------------
+
+_MENU_QSS_DARK = """
+QMenu {
+    background: #2d2d2d;
+    color: #e8e8e8;
+    border: 1px solid #404040;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 28px 6px 18px;
+    border-radius: 4px;
+    color: #e8e8e8;
+}
+QMenu::item:selected {
+    background: #094771;
+    color: #ffffff;
+}
+QMenu::item:disabled {
+    color: #888888;
+}
+QMenu::separator {
+    height: 1px;
+    background: #404040;
+    margin: 4px 10px;
+}
+"""
+
+_MENU_QSS_LIGHT = """
+QMenu {
+    background: #ffffff;
+    color: #1f2328;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 28px 6px 18px;
+    border-radius: 4px;
+    color: #1f2328;
+}
+QMenu::item:selected {
+    background: #ddf4ff;
+    color: #0969da;
+}
+QMenu::item:disabled {
+    color: #8c959f;
+}
+QMenu::separator {
+    height: 1px;
+    background: #d8dee4;
+    margin: 4px 10px;
+}
+"""
 
 
 def make_state_icon(state: IconState) -> QIcon:
@@ -53,11 +118,22 @@ class TrayIcon(QSystemTrayIcon):
         super().__init__(parent)
         self._controller = controller
         self._state = IconState.LISTENING
+        self._menu = None
 
         self.setIcon(make_state_icon(self._state))
         self.setToolTip(TITLES[self._state])
         self._build_menu()
+        self._apply_menu_theme()
         self.activated.connect(self._on_activated)
+
+        # 系统主题切换时重新应用菜单配色（Windows 10/11 支持运行时切换）。
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.styleHints().colorSchemeChanged.connect(self._apply_menu_theme)
+            except AttributeError:
+                # Qt < 6.5 没有 colorSchemeChanged 信号，忽略即可。
+                pass
 
     # ---------- 菜单 ----------
 
@@ -106,6 +182,31 @@ class TrayIcon(QSystemTrayIcon):
 
         self._menu = menu
         self.setContextMenu(menu)
+
+    # ---------- 主题 ----------
+
+    @staticmethod
+    def _is_dark_mode() -> bool:
+        """检测系统当前是否为深色模式。
+
+        Qt 6.5+ 通过 styleHints().colorScheme() 暴露系统配色方案；
+        返回 Unknown 时保守按浅色处理（浅色菜单在大多数情况下可读性更好）。
+        """
+        app = QApplication.instance()
+        if app is None:
+            return False
+        try:
+            scheme = app.styleHints().colorScheme()
+            return scheme == Qt.ColorScheme.Dark
+        except Exception:
+            return False
+
+    def _apply_menu_theme(self) -> None:
+        """根据系统主题为右键菜单应用对应的 QSS。"""
+        if self._menu is None:
+            return
+        qss = _MENU_QSS_DARK if self._is_dark_mode() else _MENU_QSS_LIGHT
+        self._menu.setStyleSheet(qss)
 
     def refresh(self) -> None:
         self._status_action.setText(self._status_text())

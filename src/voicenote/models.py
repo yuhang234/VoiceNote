@@ -3,7 +3,7 @@
 VAD 模型我们自己在本地准备；Whisper 权重交给 faster-whisper 从 HuggingFace
 拉取并缓存，这里负责三件事：
 
-1. 本地模型清单（tiny / base / small / large-v3-turbo，以及明确标注不可用的 SenseVoice）；
+1. 本地模型清单（faster-whisper 系列、NVIDIA Parakeet V3，以及明确标注不可用的 SenseVoice）；
 2. 判断某个模型的权重是否已经在缓存里（下拉框和托盘提示都要用）；
 3. 基础下载能力 ``download_model`` —— 走 huggingface_hub 的官方快照下载，
    天然带断点续传（``.incomplete`` 文件）与重试；下载失败由调用方（设置界面）
@@ -63,6 +63,8 @@ class ModelSpec:
     license: str = "MIT"
     available: bool = True
     unavailable_reason: str = ""
+    #: 该模型由哪个 ASR 引擎加载（faster_whisper / parakeet）。
+    engine: str = "faster_whisper"
 
 
 #: 界面模型卡片的数据源。顺序 = 展示顺序（高精度在前，轻量在后）。
@@ -104,6 +106,26 @@ LOCAL_MODELS: tuple[ModelSpec, ...] = (
         description="老旧笔记本首选，启动瞬时、内存占用最低。",
     ),
     ModelSpec(
+        id="parakeet-tdt-0.6b-v3",
+        repo="nvidia/parakeet-tdt-0.6b-v3",
+        label="多语种极速 V3（NVIDIA）",
+        size_mb=2500,
+        params_m=600,
+        speed_hint="CPU RTF < 0.05 / GPU 更快",
+        description=(
+            "NVIDIA Parakeet TDT V3，与 OpenSuperWhisper / Handy 使用同款模型族（NeMo 推理）。"
+            "支持 25 种欧洲语言并自动检测语种，英文识别快而准；中文请继续用 Whisper。"
+            "需要 nemo_toolkit。"
+        ),
+        license="CC-BY-4.0",
+        available=False,
+        unavailable_reason=(
+            "Parakeet 需要先安装 nemo_toolkit（pip install \"nemo_toolkit[asr]\"）。"
+            "安装后即可在下方一键切换；未安装时显示为不可用。"
+        ),
+        engine="parakeet",
+    ),
+    ModelSpec(
         id="sensevoice-small",
         repo="FunAudioLLM/SenseVoiceSmall",
         label="中文特化（实验性）",
@@ -127,6 +149,22 @@ def model_spec(model_id: str) -> ModelSpec | None:
         if spec.id == model_id:
             return spec
     return None
+
+
+def engine_for_model(model_id: str) -> str:
+    """模型 id -> 负责加载它的引擎名（默认 faster_whisper）。"""
+    spec = model_spec(model_id)
+    return spec.engine if spec is not None else "faster_whisper"
+
+
+def parakeet_installed() -> bool:
+    """nemo_toolkit 是否已安装。"""
+    try:
+        import nemo.collections.asr  # noqa: F401
+
+        return True
+    except Exception:
+        return False
 
 
 def resolve_repo(model_id: str) -> str:
@@ -190,6 +228,40 @@ def whisper_model_cached(model: str, hub_cache: Path | None = None) -> bool:
     except Exception as exc:
         log.debug("无法判断模型缓存状态：%s", exc)
         return False
+
+
+def parakeet_model_cached(
+    model_id: str = "parakeet-tdt-0.6b-v3",
+    hub_cache: Path | None = None,
+) -> bool:
+    """Parakeet 权重是否已由 NeMo / HuggingFace 缓存到本地。
+
+    NeMo 2.x 的 from_pretrained 会把 nvidia/parakeet-* 仓库缓存到 HF hub，
+    权重文件通常是 .nemo / .safetensors / .ckpt。
+    """
+    repo = resolve_repo(model_id)
+    root = Path(hub_cache) if hub_cache is not None else hf_hub_cache_dir()
+    cache_dir = root / f"models--{repo.replace('/', '--')}"
+    snapshots = cache_dir / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    try:
+        for snap in snapshots.iterdir():
+            if not snap.is_dir():
+                continue
+            for f in snap.rglob("*"):
+                if f.is_file() and f.suffix in {".nemo", ".safetensors", ".ckpt", ".bin", ".npz"}:
+                    return True
+    except Exception as exc:
+        log.debug("无法判断 Parakeet 缓存状态：%s", exc)
+    return False
+
+
+def model_cached(model_id: str, hub_cache: Path | None = None) -> bool:
+    """按模型所属引擎判断权重是否已缓存。"""
+    if engine_for_model(model_id) == "parakeet":
+        return parakeet_model_cached(model_id, hub_cache)
+    return whisper_model_cached(model_id, hub_cache)
 
 
 def model_downloaded_size(model_id: str, hub_cache: Path | None = None) -> int:

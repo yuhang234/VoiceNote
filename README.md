@@ -81,6 +81,13 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 
 `pythonw.exe` 不带控制台，启动时不会闪黑窗。想开机自启，右键托盘图标勾选「开机自启」即可。
 
+如需使用 NVIDIA Parakeet V3，再安装可选的 NeMo 依赖（会额外安装 PyTorch 等，体积较大；
+当前官方安装包未内置 NeMo，需从源码安装或自行打包）：
+
+```bash
+uv pip install --python .venv\Scripts\python.exe -e ".[parakeet]"
+```
+
 ### 自己打包
 
 ```bash
@@ -99,7 +106,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 | 页面 | 能做什么 |
 |---|---|
 | 记录 | 按日期翻看记录，点 ▶ 回放当时那段音频、复制文本、用系统程序打开当天文件 |
-| 本地模型 | 查看 `tiny` / `base` / `small` / `large-v3-turbo` 的缓存状态，下载 / 重试 / 一键切换（切换后自动热加载，不用重启） |
+| 本地模型 | 查看 `tiny` / `base` / `small` / `large-v3-turbo` / `parakeet-tdt-0.6b-v3` 的缓存状态，下载 / 重试 / 一键切换（切换后自动热加载，不用重启） |
 | API 配置 | 使用 OpenAI 兼容的云端识别：内置 OpenAI / 硅基流动 / Groq 模板，可一键测连通性 |
 | 录音与系统 | 麦克风、VAD 参数、识别提示词、数据目录、开机自启、关闭窗口行为 |
 
@@ -146,7 +153,7 @@ VoiceNote/
 | `audio.device` | 想指定麦克风。先跑 `python -m voicenote --check` 看设备列表，填名字的一部分即可 |
 | `asr.initial_prompt` | 人名、项目名、专业术语老识别错 → 写进去当提示词 |
 | `asr.language` | 默认留空自动检测，中英混说体验最好。若输出繁体，可试填 `zh` |
-| `asr.engine` | 默认 `faster_whisper`（本地）；想用云端识别改成 `api`（建议直接在「API 配置」页改） |
+| `asr.engine` | 默认 `faster_whisper`（本地 Whisper）；英文极速可用 `parakeet`（需装 `nemo_toolkit[asr]`）；想用云端识别改成 `api` |
 | `general.close_action` | 关窗口想直接退出就填 `"exit"`；默认 `"minimize_to_tray"`（隐藏到托盘，继续录音） |
 | `general.data_dir` | 想把记录放到别的盘 |
 
@@ -180,8 +187,11 @@ VoiceNote/
   20 秒一段的情况下很少见，暂不为它增加复杂度。
 - **音频会持续累积**，约 60MB/小时。目前没有自动清理。
 - **记录页没有全文搜索**，只按日期浏览。记录是纯 markdown，复杂查询用任何编辑器或 `grep`。
-- **本地模型只支持 faster-whisper 系列**（tiny/base/small/large-v3-turbo）。SenseVoiceSmall
-  的本地 ONNX 推理还没做，想用它可以在「API 配置」里接硅基流动的对应模型。
+- **本地模型支持 faster-whisper 系列**（tiny/base/small/large-v3-turbo）和
+  **NVIDIA Parakeet TDT V3**（需自行 `pip install "nemo_toolkit[asr]"`，首次切换时
+  NeMo 会自动下载约 2.5GB 权重；支持 25 种欧洲语言，不支持中文，也不接受
+  `initial_prompt` / 自定义词表）。SenseVoiceSmall 的本地 ONNX 推理还没做，
+  想用它可以在「API 配置」里接硅基流动的对应模型。
 - **API Key 目前明文存放**在 `state/secrets.json`（仅本机用户目录）。加密存储留待后续版本。
 
 ## 后续可能的方向

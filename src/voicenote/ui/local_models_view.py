@@ -72,7 +72,7 @@ class _ModelCard(QFrame):
         self._badge.setFixedWidth(84)
         title_row.addWidget(self._badge)
 
-        name = QLabel(f"faster-whisper/{spec.id}（{spec.label}）")
+        name = QLabel(f"{spec.engine}/{spec.id}（{spec.label}）")
         name.setStyleSheet("font-weight: 600;")
         title_row.addWidget(name)
         title_row.addStretch(1)
@@ -86,11 +86,11 @@ class _ModelCard(QFrame):
         meta.setWordWrap(True)
         layout.addWidget(meta)
 
-        if not spec.available:
-            reason = QLabel(f"⚠️ {spec.unavailable_reason}")
-            reason.setWordWrap(True)
-            reason.setStyleSheet("color: #ca8a04;")
-            layout.addWidget(reason)
+        self._reason = QLabel(f"⚠️ {spec.unavailable_reason}")
+        self._reason.setWordWrap(True)
+        self._reason.setStyleSheet("color: #ca8a04;")
+        self._reason.setVisible(not spec.available)
+        layout.addWidget(self._reason)
 
         bottom = QHBoxLayout()
         self._status = QLabel("状态：检查中…")
@@ -154,8 +154,14 @@ class _ModelCard(QFrame):
         percent: float = 0.0,
         speed_mb_s: float = 0.0,
         size_bytes: int = 0,
+        available_override: bool | None = None,
     ) -> None:
-        available = self.spec.available
+        is_parakeet = self.spec.engine == "parakeet"
+        available = (
+            self.spec.available if available_override is None else available_override
+        )
+        self._reason.setVisible(not available)
+        show_download = False
 
         if downloading:
             self._badge.setText("⏬ 下载中")
@@ -165,19 +171,21 @@ class _ModelCard(QFrame):
             )
             self._progress.setVisible(True)
             self._progress.setValue(int(min(100.0, max(0.0, percent))))
-            self._btn_download.setVisible(False)
             self._btn_cancel.setVisible(True)
         else:
             self._progress.setVisible(False)
             self._btn_cancel.setVisible(False)
             if not available:
                 self._badge.setText("⛔ 不可用")
-                self._status.setText("状态：未安装引擎插件（Phase 3 规划）")
+                self._status.setText(
+                    f"状态：{self.spec.unavailable_reason}"
+                    if self.spec.unavailable_reason
+                    else "状态：当前环境不可用"
+                )
             elif error:
                 self._badge.setText("⚠️ 失败")
                 self._status.setText(f"状态：{error}")
-                self._btn_download.setVisible(True)
-                self._btn_download.setText("重试下载")
+                show_download = not is_parakeet
             elif active:
                 self._badge.setText("✅ 当前使用")
                 self._status.setText(
@@ -185,7 +193,6 @@ class _ModelCard(QFrame):
                     if size_bytes
                     else "状态：已就绪（已缓存）"
                 )
-                self._btn_download.setVisible(False)
             elif cached:
                 self._badge.setText("💾 已缓存")
                 self._status.setText(
@@ -193,18 +200,25 @@ class _ModelCard(QFrame):
                     if size_bytes
                     else "状态：已就绪（已缓存）"
                 )
-                self._btn_download.setVisible(False)
+            elif is_parakeet:
+                # NeMo 在首次切换时自动下载，不需要手动点“下载模型”
+                self._badge.setText("— 待下载")
+                self._status.setText("状态：首次切换时由 NeMo 自动下载")
             else:
                 self._badge.setText("— 未下载")
                 self._status.setText("状态：未下载")
-                self._btn_download.setVisible(True)
-                self._btn_download.setText("⬇ 下载模型")
+                show_download = True
 
-        self._btn_primary.setEnabled(available and cached and not active and not downloading)
+        self._btn_download.setVisible(show_download)
+        self._btn_download.setText("⬇ 下载模型")
+        # Parakeet 不缓存也能直接切换（切换时 NeMo 自动下载）
+        self._btn_primary.setEnabled(
+            available and not active and not downloading and (cached or is_parakeet)
+        )
         self._btn_cleanup.setEnabled(available and cached and not active and not downloading)
         self._btn_download.setEnabled(available and not downloading)
         self._btn_primary.setToolTip(
-            "" if available else "该模型在当前版本不可用"
+            "" if available else "该模型在当前环境不可用（请先安装对应引擎依赖）"
         )
 
 
@@ -327,19 +341,24 @@ class LocalModelsView(QWidget):
         self._path_label.setText(f"模型缓存目录：{cache_dir}")
         self._disk_label.setText(_free_disk_text(cache_dir))
 
-        active_id = cfg.asr.model if cfg.asr.engine == "faster_whisper" else ""
         for model_id, card in self._cards.items():
-            cached = models.whisper_model_cached(model_id)
+            engine = models.engine_for_model(model_id)
+            active = cfg.asr.model == model_id and cfg.asr.engine == engine
+            cached = models.model_cached(model_id)
             size = models.model_downloaded_size(model_id) if cached else 0
             percent, speed = self._progress.get(model_id, (0.0, 0.0))
+            available_override = (
+                models.parakeet_installed() if engine == "parakeet" else None
+            )
             card.update_status(
                 cached=cached,
-                active=(model_id == active_id),
+                active=active,
                 downloading=model_id in self._workers,
                 error=self._errors.get(model_id, ""),
                 percent=percent,
                 speed_mb_s=speed,
                 size_bytes=size,
+                available_override=available_override,
             )
 
         # 硬件控件回填（不覆盖用户尚未应用的选择？简单起见以配置为准）
@@ -373,6 +392,9 @@ class LocalModelsView(QWidget):
 
     def start_download(self, model_id: str) -> None:
         if model_id in self._workers:
+            return
+        if models.engine_for_model(model_id) == "parakeet":
+            self._controller.notify("Parakeet 模型会在首次切换时由 NeMo 自动下载")
             return
         self._errors.pop(model_id, None)
         worker = ModelDownloadWorker(
@@ -423,7 +445,7 @@ class LocalModelsView(QWidget):
 
     def cleanup_model(self, model_id: str) -> None:
         cfg = self._controller.cfg
-        if cfg.asr.engine == "faster_whisper" and cfg.asr.model == model_id:
+        if cfg.asr.model == model_id and cfg.asr.engine == models.engine_for_model(model_id):
             self._controller.notify("当前正在使用的模型不能删除，请先切换到其他模型")
             return
 
@@ -444,7 +466,7 @@ class LocalModelsView(QWidget):
         cfg = self._controller.cfg
         return replace(
             cfg.asr,
-            engine="faster_whisper",
+            engine=models.engine_for_model(model_id),
             model=model_id,
             device=self._combo_device.currentData(),
             compute_type=self._combo_compute.currentData(),

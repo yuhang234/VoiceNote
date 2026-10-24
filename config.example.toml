@@ -42,9 +42,11 @@ pre_roll_ms = 300
 speech_pad_ms = 200
 
 [asr]
-# 引擎："faster_whisper"（本地离线，默认）或 "api"（云端 OpenAI 兼容接口）。
+# 引擎："faster_whisper"（本地离线，默认）、"parakeet"（本地 NVIDIA，需先
+# pip install "nemo_toolkit[asr]"）或 "api"（云端 OpenAI 兼容接口）。
 engine = "faster_whisper"
-# 本地模型：tiny / base / small / large-v3-turbo，可在「本地模型」页面一键切换。
+# 本地模型：tiny / base / small / large-v3-turbo / parakeet-tdt-0.6b-v3，
+# 可在「本地模型」页面一键切换。Parakeet V3 支持 25 种欧洲语言，中文请继续用 Whisper。
 model = "large-v3-turbo"
 # cuda 或 cpu。cuda 跑不起来时改成 cpu 即可，其余不用动。
 device = "cuda"
@@ -54,7 +56,7 @@ compute_type = "int8_float16"
 language = ""
 # 贪心解码最快。想要更准可以调到 5，但会明显变慢。
 beam_size = 1
-# 初始提示词，可用来喂专有名词（人名、项目名、术语），提升识别率。
+# 初始提示词，可用来喂专有名词（人名、项目名、术语），提升识别率（仅 Whisper）。
 initial_prompt = ""
 
 [asr.api]
