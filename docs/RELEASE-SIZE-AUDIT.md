@@ -66,9 +66,14 @@ Flagging rule used below / 下面"过大"的判定标准:
 | yuhang234/VoiceNote | v0.1.1 | VoiceNote-Setup-0.1.1.exe | 1,014,516,553 | 🔴🔴 oversized |
 | yuhang234/VoiceNote | v0.1.0 | *(no assets)* / 无资产 | — | — |
 
-Totals / 合计: 9 repositories, 2 releases with zero assets (`nexora`, `hang`), 41 release assets,
-**6.58 GB** of published artifact bytes in total, of which **4.31 GB** is in the six artifacts
-this audit flags as oversized / 共 41 个资产、6.58 GB；其中 6 个被判定为过大，合计 4.31 GB。
+Totals / 合计: 9 repositories — 2 of them (`nexora`, `hang`) have no releases at all, and
+`VoiceNote v0.1.0` has a release with no assets. Across the rest there are **53 release assets**
+totalling **5,918,678,712 bytes (5.92 GB)**, of which **4.31 GB** sits in the seven artifacts this
+audit flags as oversized.
+
+9 个仓库 —— 其中 2 个（`nexora`、`hang`）完全没有 Release，`VoiceNote v0.1.0` 有 Release 但无资产。
+其余合计 **53 个资产、5,918,678,712 字节（5.92 GB）**，其中 **4.31 GB** 集中在本审计判定为过大的
+7 个资产里。
 
 ---
 
@@ -315,7 +320,13 @@ three.** 目标：pc.zip < 80 MB、apk < 80 MB（单 ABI）；每个版本只发
 | 6 | Staircase-0.2.0-pc.zip | 201,695,729 | duplicated payload (zip + installer + apk) | one installer + one apk; strip symbols | < 120 MB |
 | 7 | dune-echoes-1.0.0-pc.zip | 204,262,396 | duplicated payload + 21 MB of screenshots in assets | same as #6; move screenshots to notes | < 120 MB |
 
-Everything else is under the thresholds and needs no work. / 其余资产均在门槛以内，无需处理。
+The other 46 assets total 1.61 GB and are all under the thresholds: `noema` 9.5 MB, `os-visualizer`
+23.9 MB, folio desktop 6.7 MB / 9.9 MB, `foundation-vn` 77–113 MB per artifact, plus screenshots
+and `SHA256SUMS.txt`.
+
+其余 46 个资产合计 1.61 GB，均在门槛以内：`noema` 9.5 MB、`os-visualizer` 23.9 MB、
+folio 桌面 6.7 MB / 9.9 MB、`foundation-vn` 每个资产 77–113 MB，另外是截图与
+`SHA256SUMS.txt`。
 
 ---
 
