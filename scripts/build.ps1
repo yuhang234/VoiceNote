@@ -76,6 +76,33 @@ if ($proc.ExitCode -ne 0) {
 }
 Note "自检通过"
 
+# 打包后核对：过滤后的 nvidia DLL 必须真的进了产物。
+# 以前是整目录复制，漏包也看不出；现在显式挑文件，所以这里多一道门禁。
+Step "核对 CUDA DLL 是否进入产物"
+$requiredDlls = @("nvidia\cudnn\bin\cudnn64_9.dll", "nvidia\cublas\bin\cublas64_12.dll")
+$internal = Join-Path $dist "VoiceNote\_internal"
+foreach ($rel in $requiredDlls) {
+    $full = Join-Path $internal ($rel -replace '\\', '/')
+    if (-not (Test-Path $full)) {
+        Write-Host "    缺 $rel —— GPU 会静默回落 CPU，不出包" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host ("    ok  $rel  ({0:N1} MB)" -f ((Get-Item $full).Length / 1MB)) -ForegroundColor DarkGray
+}
+
+# 体积去向一目了然：打包体积异常时，第一眼看这行就知道是谁在膨胀。
+$internalTops = Get-ChildItem $internal -Directory -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        [pscustomobject]@{
+            Name = $_.Name
+            MB   = (Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+        }
+    } |
+    Sort-Object MB -Descending
+$internalTops | ForEach-Object { Write-Host ("    {0,-28} {1,10:N1} MB" -f $_.Name, $_.MB) -ForegroundColor DarkGray }
+Write-Host ("    {0,-28} {1,10:N1} MB" -f "(dist/VoiceNote 合计)",
+    ((Get-ChildItem (Join-Path $dist 'VoiceNote') -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
+
 Step "打便携版 ZIP"
 $zip = Join-Path $dist "VoiceNote-Portable-$version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
